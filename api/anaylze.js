@@ -4,7 +4,7 @@
 
 const crypto = require('crypto');
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 const MAX_PDF_BYTES = 4 * 1024 * 1024; // Vercel 요청 본문 한도(4.5MB)보다 작게
 const RETRY_STATUS = [429, 500, 503];
 
@@ -81,10 +81,17 @@ async function callGemini(pdfBase64, retries = 2, delay = 1500) {
     generationConfig: { responseMimeType: 'application/json' },
   };
 
+  // (선택) 환경변수 THINKING_LEVEL을 설정하면 AI의 '생각 시간'을 조절해 응답을 빠르게 할 수 있습니다. 예: low
+  if (process.env.THINKING_LEVEL) {
+    payload.generationConfig.thinkingConfig = { thinkingLevel: process.env.THINKING_LEVEL };
+  }
+
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
     body: JSON.stringify(payload),
+    // Vercel이 함수를 강제 종료(300초)하기 전에 먼저 끊고 안내 메시지를 보내기 위함
+    signal: AbortSignal.timeout(270 * 1000),
   });
 
   if (!response.ok) {
@@ -149,6 +156,10 @@ module.exports = async function handler(req, res) {
   } catch (error) {
     if (error instanceof HttpError) {
       return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+      console.error('[분석 오류] Gemini 응답 시간 초과');
+      return res.status(504).json({ error: '분석 시간이 너무 오래 걸려 중단되었습니다. 더 짧은 PDF로 다시 시도해 주세요.' });
     }
     console.error('[분석 오류]', error);
     res.status(500).json({ error: '분석 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.' });
